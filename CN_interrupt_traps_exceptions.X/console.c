@@ -26,7 +26,12 @@
  * SH		28 Feb. 2022	v2.5    Add Uart1 and Uart2 to fprintf2 because needed
  *                                  for vending machine. 
  * SH		4 March 2022    v2.6    Add mutex and stdio_lock(), stdio_unlock(). A macro RTOS must be define inside MPLABX IDE
- * SH		30 May 2022		v2,7	Add a delay at the end of LCDInitLCDInit()
+ * SH		30 May 2022		v2.7	Add a delay at the end of LCDInitLCDInit()
+ * SH       10 Jan. 2023    v2.8    Rename a functions using snake style.
+ * SH       21 Feb. 2023    v2.9    Modify initUart2() so it can also receive without interrupt - see also getch2()
+ * SH		2 June 2023     v2.10	Add getch_nb(){ and getch_b() functions
+ * SH       6 June 2023     v2.11   Add UART3 to_mon_putc()
+ *                                  Add uart3_init() 
  *          
  *~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 #include <xc.h>
@@ -34,13 +39,14 @@
 #include <sys/attribs.h>
 #include <string.h>
 
+
 #ifdef RTOS
 /* Kernel includes. */
-#include "FreeRTOS.h"
-#include "task.h"
-#include "queue.h" 
-#include "semphr.h"
-#include "croutine.h"
+#include "../../Source/include/FreeRTOS.h"
+#include "../../Source/include/task.h"
+#include "../../Source/include/queue.h" 
+#include "../../Source/include/semphr.h"
+#include "../../Source/include/croutine.h"
 #endif
 
 
@@ -188,51 +194,10 @@ Description: Initializes the LCD using pmp bus.
 //	LCDHome();
 //}
 
+
 #if defined EXPLORER_16_32
-void LCDInit(void)
-{	
-    pmp_Init();
-
-	_uLCDloops = LCD_STARTUP;
-	Wait(_uLCDloops);
-
-	_uLCDloops = LCD_F_INSTR;
-	//PMDIN1 = 0b00111000;			// Set the default function
-    PMDIN = 0b00111000;			// Set the default function
-	Wait(_uLCDloops);
-
-	_uLCDloops = LCD_STARTUP;
-	Wait(_uLCDloops);
-
-	_uLCDloops = LCD_F_INSTR;
-	PMDIN = 0b00001100;
-	Wait(_uLCDloops);
-
-	_uLCDloops = LCD_STARTUP;
-	Wait(_uLCDloops);
-
-	_uLCDloops = LCD_S_INSTR;
-	PMDIN = 0b00000001;			// Clear the display
-	Wait(_uLCDloops);
-
-	_uLCDloops = LCD_STARTUP;
-	Wait(_uLCDloops);
-
-	_uLCDloops = LCD_S_INSTR;
-	PMDIN = 0b00000110;			// Set the entry mode
-     
-	Wait(_uLCDloops);
-
-	LCDClear();
-	LCDHome();
-	_uLCDloops = LCD_SETTLE_TIME;
-    Wait(_uLCDloops);
-}
-#endif
-
-/* initLCD : same as LCDInit*/
-#if defined EXPLORER_16_32
-void initLCD(void){	
+/* lcd_init */
+void lcd_init(void){	
     pmp_Init();
 
 	_uLCDloops = LCD_STARTUP;
@@ -569,7 +534,7 @@ void LCD_InitSequence(unsigned char bDisplaySetOptions)
 }
 
 
-void initLCD(void){	
+void lcd_init(void){	
         LCD_ConfigurePins();
         LCD_InitSequence(displaySetOptionDisplayOn);
 }
@@ -957,34 +922,39 @@ U2BRG = (PBCLK  / 16 / baudrate) -1 ; for BREGH=0
 //#define U_ENABLE 	0x8008      // enable the UART peripheral (BREGH=1)
 #define U_ENABLE 	0x8000      // 
 #define U_TX    	0x0400      // enable transmission
+#define U_TX_RX     0x1400; // enable TX and RX
    
 /**********************************
  Initialize the UART2 serial port
 **********************************/
-void initUart2( void)
+void uart2_init( void)
 {
    U2BRG    = BRATE;    
    U2MODE    = U_ENABLE;
-   U2STA    = U_TX;
-   TRTS    = 0;        // make RTS output
-   RTS     = 1;        // set RTS default status
-} // initUart2
+   U2STA    = U_TX_RX;
+   //U2STA    = U_TX;
+   //TRTS    = 0;        // make RTS output
+   //RTS     = 1;        // set RTS default status
+} // uart2_init
 
 void Uart2_init( void)
 {
    U2BRG    = BRATE;    
    U2MODE    = U_ENABLE;
-   U2STA    = U_TX;
-   TRTS    = 0;        // make RTS output
-   RTS     = 1;        // set RTS default status
-} // initUart2
+   U2STA    = U_TX_RX;
+   //U2STA    = U_TX;
+   //TRTS    = 0;        // make RTS output
+   //RTS     = 1;        // set RTS default status
+
+} // uart2_init
+
 
 /**********************************
  initialize the UART2 serial port 
  with interrupt.  
  See ISR at the end of this document
  **********************************/
-void initUart2_wInt( void)
+void uart2_wInt_init( void)
 {
    U2BRG    = BRATE ;    
    U2MODE    = U_ENABLE ;     // enable the UART peripheral (BREGH=1)
@@ -1009,6 +979,9 @@ void initUart2_wInt( void)
 	//INTEnableSystemMultiVectoredInt();
     __builtin_enable_interrupts();
 } // initUart2_wInt
+
+
+
 /****************************************
 Send a singe character to the UART2 
 serial port.
@@ -1022,7 +995,7 @@ output:
 *****************************************/
 int putc2(char c)
 {
-   while ( CTS);              // wait for !CTS, clear to send
+  // while ( CTS);              // wait for !CTS, clear to send
    while ( U2STAbits.UTXBF);   // wait while Tx buffer full
    U2TXREG = c;
    return c;
@@ -1038,15 +1011,50 @@ int putc2_noHard(char c)
    return c;
 }
 
-/****************************************
-*****************************************/
-// wait for a new character to arrive to the UART2 serial port
-char getc2( void)
+/******************************************************************************
+ * Blocks waiting for a new character to arrive to the UART2 serial port
+ * Returns the character only if not empty
+******************************************************************************/
+char getch_b( void)
 {
-    RTS = 0;            // assert Request To Send !RTS
-   while ( !U2STAbits.URXDA);   // wait for a new character to arrive
+    //RTS = 0;            // assert Request To Send !RTS
+   while ( !U2STAbits.URXDA){ // wait for a new character to arrive
+#ifdef RTOS
+       vTaskDelay(10/portTICK_RATE_MS); // slack time when using RTOS
+#endif
+   }
    return U2RXREG;      // read the character from the receive buffer
-   RTS = 1;
+   //RTS = 1;
+}// 
+
+
+/****************************************
+ * Non-blocking polling for a new character to arrive to the UART2 serial port
+ * Returns the character if not empty
+ * Returns 0xff if empty
+*****************************************/
+char getch_nb( void){
+    //RTS = 0;            // assert Request To Send !RTS
+   if( !U2STAbits.URXDA){
+       return 0xff;      // read the character from the receive buffer
+   }
+   else {
+       return U2RXREG; // if not empty
+   }
+   //RTS = 1;
+}// 
+
+// returns the previous value if empty
+char getch_nb_v2( void){
+   static char last =0;
+   if( !U2STAbits.URXDA){
+       return last;      // read the character from the receive buffer
+   }
+   else {
+       last = U2RXREG; // if not empty
+       return last;
+   }
+   //RTS = 1;
 }// 
 
 
@@ -1195,7 +1203,7 @@ void UART1_Initialize(void)
     U1STAbits.UTXEN = 1;
 }
 
-void initUart1(void){
+void uart1_init(void){
     UART1_Initialize();
 }
 
@@ -1273,6 +1281,19 @@ void UART1_Write(uint8_t txData)
 //    U1MODEbits.UARTEN = 0;
 //    U1STAbits.UTXEN = 0;
 //}
+
+/**************************UART3 section******************************/
+void uart3_init( void)
+{
+   U3BRG    = BRATE;    
+   U3MODE    = U_ENABLE;
+   U3STA    = U_TX_RX;
+   //U2STA    = U_TX;
+   //TRTS    = 0;        // make RTS output
+   //RTS     = 1;        // set RTS default status
+} // uart2_init
+
+
 #elif defined MX3
 
 /***	UART_InitPoll
@@ -1298,6 +1319,12 @@ void UART_InitPoll(unsigned int baud)
 {
     UART_ConfigurePins();
     UART_ConfigureUart(baud);
+}
+
+void uart4_init(void)
+{
+    UART_ConfigurePins();
+    UART_ConfigureUart(800000);
 }
 
 /***	UART_ConfigureUart
@@ -1445,7 +1472,7 @@ void Uart2_init( void)
    Function: int  fprintf2(int mode, char *buffer){
 
    Precondition:
-      initUartx or initLCD must be called prior to calling this routine.
+      uartx_init or lcd_init must be called prior to calling this routine.
 
    Overview:
         This function prints a string of characters to the selected console.
@@ -1458,7 +1485,6 @@ void Uart2_init( void)
    Output: returns the number of characters transmitted to the console
 
    *******************************************************************************/
-
 int  fprintf2(int mode, char *buffer){
     int len =0;
     unsigned int i;
@@ -1477,7 +1503,7 @@ int  fprintf2(int mode, char *buffer){
             break;
         /* Uart2 */
         case C_UART2:
-            while(U2STAbits.TRMT == 0);  
+                while(U2STAbits.TRMT == 0);  
                 for (i = len; i; --i)
                 {
                     while(U2STAbits.TRMT == 0);
@@ -1526,7 +1552,12 @@ void stdio_set(int _stdio){
 /*Only for RTOS system*/
 static SemaphoreHandle_t mutex_stdio;
 static mutex_created =0;
-
+/*
+	Locks the stdio mutex.
+	If the mutex does not exist yet, it will be created.
+	Also, the function sets the stdio specified by the argument: 
+		C_UART1 or C_UART2
+*/
 void stdio_lock(int _stdio){
     // creates the mutex only once
     if(mutex_created == 0){
@@ -1538,15 +1569,28 @@ void stdio_lock(int _stdio){
     return;
 
 }
+/*
+	Unlocks the stdio mutex.
+	If the mutex does not exist yet, the function immediately returns.
+	Also, the function sets the stdio specified by the argument: 
+		C_UART1 or C_UART2
+*/
 void stdio_unlock(int _stdio){
         // cannot unlock if mutex does not exist yet
-        if(mutex_created == 0)return;
-        
+        if(mutex_created == 0)return;  
         stdio = _stdio;
         xSemaphoreGive(mutex_stdio);
 }
 
 #endif
+/*******************************************************************************
+
+   Precondition:
+      uartx_init or lcd_init must be called prior to calling this routine.
+
+   Output: returns the number of characters transmitted to the console
+
+*******************************************************************************/
 void _mon_putc (char c)
 {
     static int cur_line = 0;
@@ -1561,6 +1605,10 @@ void _mon_putc (char c)
             while(U2STAbits.TRMT == 0);
             U2TXREG = c;        
             break;
+        case C_UART3:
+            while(U3STAbits.TRMT == 0);
+            U3TXREG = c;        
+            break;            
         /* Uart4 */
 #ifndef MICROSTICK_II
         case C_UART4:
