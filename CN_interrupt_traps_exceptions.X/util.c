@@ -11,6 +11,7 @@
  * Serge Hould      29 Sept. 2021	v1.0
  * Serge Hould      13 Dec 2021     v1.1 Adapt for MICROSTICK II
  * Serge Hould      11 April 2022   v1.2 Modify heartbeat macros
+ * SH               28 June 2023    v1.3 Add  map function 
  * 
  * TO DO: fine tune delay for MICROSTICK II 
  * 		
@@ -353,3 +354,8 @@ void delay_ms( unsigned int  tmsDelay )
 
 #endif
 /********************* End of Blocking Delay section  section******************/
+
+/* Map function */
+long map(long x, long in_min, long in_max, long out_min, long out_max) {
+  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
