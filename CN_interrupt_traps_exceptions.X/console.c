@@ -32,6 +32,15 @@
  * SH		2 June 2023     v2.10	Add getch_nb(){ and getch_b() functions
  * SH       6 June 2023     v2.11   Add UART3 to_mon_putc()
  *                                  Add uart3_init() 
+ * SH       28 08 2023      v2.12   Add send_int16(int16_t data) that sends 2 bytes along with start bye,
+ *                                  stop byte and checksum
+ * SH       1 Sept. 2023    v2.13   Add send_two_int32() function and rename send_int16() 
+ *                                  into send_one_int16().
+ * SH       15 Dec. 2023    v2.14   Add a baud rate parameter to the following functions:
+ *                                  void uart2_init( int baud);
+ *                                  void uart1_init( int baud);
+ *                                  void uart3_init( int baud);
+ *                                  void uart2_wInt_init(int baud);
  *          
  *~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 #include <xc.h>
@@ -634,6 +643,42 @@ static void LCDHome(void)
 {
     LCD_WriteCommand(cmdLcdRetHome);
 }
+
+/* ------------------------------------------------------------ */
+/***	LCD_WriteBytesAtPosCgram
+**
+**  Synopsis:
+**      LCD_WriteBytesAtPosCgram(userDefArrow, 8, posCgramChar0);
+**
+**	Parameters:
+**		unsigned char *pBytes	- pointer to the string of bytes
+**		unsigned char len		- the number of bytes to be written
+**		unsigned char bAdr		- the position in CGRAM where bytes will be written
+**
+**	Return Value:
+**		
+**	Description:
+**		Writes the specified number of bytes to CGRAM starting at the specified position. 
+**      This allows user characters to be defined.
+**		It sets the corresponding write position and then writes data bytes when the device is ready.
+**      
+**          
+*/
+void LCD_WriteBytesAtPosCgram(unsigned char *pBytes, unsigned char len, unsigned char bAdr)
+{
+	// Set write position
+	LCD_SetWriteCgramPosition(bAdr);
+
+	// Write the string of bytes that define the character to CGRAM
+	unsigned char idx = 0;
+	while(idx < len)
+	{
+		LCD_WriteDataByte(pBytes[idx]);
+		idx++;
+	}
+}
+
+
 #endif
 /***************************************************************
 Name:	void LCDL1Home(void)
@@ -705,45 +750,6 @@ void LCDPut(char A)
 	PMADDR = 0x0001;
     //PMPSetAddress(0x0001); 
 	PMDIN = A;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 	while(_uLCDloops)
 	_uLCDloops--;
 	Nop();
@@ -927,9 +933,8 @@ U2BRG = (PBCLK  / 16 / baudrate) -1 ; for BREGH=0
 /**********************************
  Initialize the UART2 serial port
 **********************************/
-void uart2_init( void)
-{
-   U2BRG    = BRATE;    
+void uart2_init( int baud){
+   U2BRG    =(40000000/16/baud)-1;   
    U2MODE    = U_ENABLE;
    U2STA    = U_TX_RX;
    //U2STA    = U_TX;
@@ -954,9 +959,9 @@ void Uart2_init( void)
  with interrupt.  
  See ISR at the end of this document
  **********************************/
-void uart2_wInt_init( void)
+void uart2_wInt_init( int baud)
 {
-   U2BRG    = BRATE ;    
+   U2BRG     =(40000000/16/baud)-1;   
    U2MODE    = U_ENABLE ;     // enable the UART peripheral (BREGH=1)
   // U2MODE = 0x8000;
    //U2STA    = U_TX;      // enable transmission
@@ -1033,28 +1038,32 @@ char getch_b( void)
  * Returns the character if not empty
  * Returns 0xff if empty
 *****************************************/
-char getch_nb( void){
-    //RTS = 0;            // assert Request To Send !RTS
-   if( !U2STAbits.URXDA){
-       return 0xff;      // read the character from the receive buffer
-   }
-   else {
-       return U2RXREG; // if not empty
-   }
-   //RTS = 1;
-}// 
+//char get_byte( void){
+//    //RTS = 0;            // assert Request To Send !RTS
+//   if( !U2STAbits.URXDA){
+//       return 0xff;      // read the character from the receive buffer
+//   }
+//   else {
+//       return U2RXREG; // if not empty
+//   }
+//   //RTS = 1;
+//}// 
 
-// returns the previous value if empty
-char getch_nb_v2( void){
+/*
+ Non-blocking polling function for a new character to be
+ Received from the UART2 serial port.
+ Returns the received character if not empty.
+ Returns the previous value if empty.
+*/
+char get_byte( void){
    static char last =0;
-   if( !U2STAbits.URXDA){
+   if(!(U2STAbits.URXDA == 1)){
        return last;      // read the character from the receive buffer
    }
    else {
        last = U2RXREG; // if not empty
        return last;
    }
-   //RTS = 1;
 }// 
 
 
@@ -1150,14 +1159,9 @@ uint8_t UART2_Read(void)
     return U2RXREG;
 }
 
-void UART2_Write(uint8_t txData)
-{
-    while(U2STAbits.UTXBF == 1)
-    {
-        
-    }
-
-    U2TXREG = txData;    // Write the data byte to the USART.
+void UART2_Write(uint8_t txData){
+    while(U2STAbits.TRMT == 0);
+    U2TXREG =  txData;   
 }
 
 //UART2_STATUS UART2_StatusGet (void)
@@ -1181,11 +1185,114 @@ void UART2_Write(uint8_t txData)
 //
 //}
 
+/* Function that sends one byte to the serial port */
+void put_byte(char tx) {
+    UART2_Write(tx);
+}
+/*
+ Function that splits an int16 into two bytes
+ and then sends them to UART2 serial port using a
+ start byte, stop byte and checksum byte.
+*/ 
+
+#define START_BYTE 0x7E
+#define STOP_BYTE 0x7F
+
+void send_one_int16(int16_t data) {
+    uint8_t start_byte = START_BYTE;
+    uint8_t stop_byte = STOP_BYTE;
+    uint8_t data_bytes[2] = { (data >> 8) & 0xFF, data & 0xFF };
+    uint8_t checksum = start_byte + stop_byte + data_bytes[0] + data_bytes[1];
+    
+    UART2_Write(start_byte);    
+    UART2_Write(data_bytes[0]);
+    UART2_Write(data_bytes[1]);
+    UART2_Write(checksum);
+    UART2_Write(stop_byte);
+    
+    //putchar(start_byte);
+//    putchar(data_bytes[0]);
+//    putchar(data_bytes[1]);
+//    putchar(checksum);
+//    putchar(stop_byte);
+}
+
+/* Function that splits two int32 into eight bytes
+ * and then it sends them using a
+ * start byte, stop byte and checksum byte.
+ * start byte is 0x03 and
+ * stop byte is 0xfc.
+*/
+void send_two_int32(int sp, int pv){
+        char buff2[100], debug=0;
+        char *buffer;
+        unsigned int i;
+        uint8_t sp_0, sp_1, sp_2, sp_3, pv_0, pv_1, pv_2, pv_3;
+        sp_0 = sp & 0xff;
+        sp_1 = (sp >> 8) & 0xff;
+        sp_2 = (sp >> 16) & 0xff;
+        sp_3 = (sp >> 24) & 0xff;
+        pv_0 = pv & 0xff;
+        pv_1 = (pv >> 8) & 0xff;
+        pv_2 = (pv >> 16) & 0xff;        
+        pv_3 = (pv >> 24) & 0xff;             
+        buff2[0]=0x03;  // must be also set in the visualizer
+        buff2[1]=sp_0 ; //LSB
+        buff2[2]=sp_1 ;    
+        buff2[3]=sp_2 ;
+        buff2[4]=sp_3 ;    //MSB 
+        buff2[5]=pv_0 ; //LSB
+        buff2[6]=pv_1 ;    
+        buff2[7]=pv_2 ;
+        buff2[8]=pv_3 ;    //MSB      
+        buff2[9]=0xfc; // must be also set in the visualizer
+        //buff2[10]=0;
+        
+        buffer = &buff2[0];
+
+        while(U2STAbits.TRMT == 0);  
+        for (i = 10; i; --i)
+        {
+                    while(U2STAbits.TRMT == 0);
+                    U2TXREG = *(char*)buffer++;        
+        }
+}
+
+int16_t rec_one_int16_nb() {
+    uint8_t byte;
+    uint8_t start_byte = START_BYTE;
+    uint8_t stop_byte = STOP_BYTE;
+    uint8_t data_bytes[2];
+    uint8_t checksum = start_byte + stop_byte;
+    int i;
+    static int16_t last =0;
+
+    if ((byte = get_byte()) != start_byte) {
+        return last;
+    }
+
+    for (i = 0; i < 2; i++) {
+        data_bytes[i] = get_byte();
+        checksum += data_bytes[i];
+    }
+    byte = get_byte();
+    if (byte != checksum) {
+        // Checksum error
+        return last;
+    }
+
+    if (get_byte()!= stop_byte) {
+        // Stop byte error
+        return last;
+    }
+    last = (data_bytes[0] << 8) | data_bytes[1];
+    return last;
+}
 
 /***************** Uart1 section************************************/
 
 
-void UART1_Initialize(void)
+void UART1_Initialize(int baud)
 {
 /**    
      Set the UART1 module to the options selected in the user interface.
@@ -1197,14 +1304,13 @@ void UART1_Initialize(void)
     // UTXISEL0 TX_ONE_CHAR; UTXINV disabled; OERR NO_ERROR_cleared; URXISEL RX_ONE_CHAR; UTXBRK COMPLETED; UTXEN disabled; ADDEN disabled; 
     U1STA = 0x00;
 
-    U1BRG = BRATE;
-    
+    U1BRG    =(40000000/16/baud)-1;   
     U1MODEbits.UARTEN = 1;   // enabling UART ON bit
     U1STAbits.UTXEN = 1;
 }
 
-void uart1_init(void){
-    UART1_Initialize();
+void uart1_init(int baud){
+    UART1_Initialize(baud);
 }
 
 uint8_t UART1_Read(void)
@@ -1283,9 +1389,10 @@ void UART1_Write(uint8_t txData)
 //}
 
 /**************************UART3 section******************************/
-void uart3_init( void)
+void uart3_init( int baud)
 {
-   U3BRG    = BRATE;    
+    
+   U3BRG    =(40000000/16/baud)-1;      
    U3MODE    = U_ENABLE;
    U3STA    = U_TX_RX;
    //U2STA    = U_TX;
@@ -1296,6 +1403,7 @@ void uart3_init( void)
 
 #elif defined MX3
 
+/* Uart4 section */
 /***	UART_InitPoll
 **
 **	Parameters:
@@ -1315,16 +1423,16 @@ void uart3_init( void)
 **      
 **          
 */
-void UART_InitPoll(unsigned int baud)
+void UART4_InitPoll(unsigned int baud)
 {
-    UART_ConfigurePins();
-    UART_ConfigureUart(baud);
+    UART4_ConfigurePins();
+    UART4_ConfigureUart(baud);
 }
 
-void uart4_init(void)
+void uart4_init(int baud)
 {
-    UART_ConfigurePins();
-    UART_ConfigureUart(800000);
+    UART4_ConfigurePins();
+    UART4_ConfigureUart(baud);
 }
 
 /***	UART_ConfigureUart
@@ -1345,7 +1453,7 @@ void uart4_init(void)
 **          
 */
 #define PB_FRQ  40000000
-void UART_ConfigureUart(unsigned int baud)
+void UART4_ConfigureUart(unsigned int baud)
 {
     U4MODEbits.ON     = 0;
     U4MODEbits.SIDL   = 0;
@@ -1390,7 +1498,7 @@ void UART_ConfigureUart(unsigned int baud)
 **      This is a low-level function called by UART_Init(), so user should avoid calling it directly.   
 **          
 */
-void UART_ConfigurePins()
+void UART4_ConfigurePins()
 {
      TRISFbits.TRISF12  = 0;   //TX digital output
     RPF12R = 2;     // 0010 U4TX
@@ -1421,6 +1529,19 @@ void UART_PutChar(char ch)
     U4TXREG = ch;
 }
 
+/******************************************************************************
+ * Blocks waiting for a new character to arrive to the UART serial port
+ * Returns the character only if not empty
+******************************************************************************/
+char getch_b( void){
+   while ( !U4STAbits.URXDA){ // wait for a new character to arrive
+#ifdef RTOS
+       vTaskDelay(10/portTICK_RATE_MS); // slack time when using RTOS
+#endif
+   }
+   return U4RXREG;      // read the character from the receive buffer
+}
+
 /***	UART_PutString
 **
 **	Parameters:
@@ -1442,11 +1563,300 @@ void UART_PutString(char szData[])
         UART_PutChar((*(pData++)));
     }
 }
+/****************************** Uart3 section *****************************/
+
+/***	UART_InitPoll
+**
+**	Parameters:
+**		unsigned int baud - UART baud rate.
+**                                     for example 115200 corresponds to 115200 baud			
+**
+**	Return Value:
+**		
+**
+**	Description:
+**		This function initializes the hardware involved in the UART module, in 
+**      the UART receive without interrupts (polling method).
+**      The UART_TX digital pin is configured as digital output.
+**      The UART_RX digital pin is configured as digital input.
+**      The UART_TX and UART_RX are mapped over the UART1 interface.
+**      The UART1 module of PIC32 is configured to work at the specified baud, no parity and 1 stop bit.
+**      
+**          
+*/
+void UART3_InitPoll(unsigned int baud)
+{
+    UART3_ConfigurePins();
+    UART3_ConfigureUart(baud);
+}
+
+void uart3_init(int baud)
+{
+    UART3_ConfigurePins();
+    UART3_ConfigureUart(baud);
+}
+
+/***	UART_ConfigureUart
+**
+**	Parameters:
+**		unsigned int baud - UART baud rate.
+**                                     for example 115200 corresponds to 115200 baud
+**
+**	Return Value:
+**		
+**
+**	Description:
+**		This function configures the UART4 hardware interface of PIC32, according 
+**      to the provided baud rate, no parity and 1 stop bit, with no interrupts.
+**      In order to compute the baud rate value, it uses the peripheral bus frequency definition (PB_FRQ, located in config.h)
+**      This is a low-level function called by initialization functions, so user should avoid calling it directly.   
+**      
+**          
+*/
+
+void UART3_ConfigureUart(unsigned int baud)
+{
+    U3MODEbits.ON     = 0;
+    U3MODEbits.SIDL   = 0;
+    U3MODEbits.IREN   = 0; 
+    U3MODEbits.RTSMD  = 0;
+    U3MODEbits.UEN0   = 0; 
+    U3MODEbits.UEN1   = 0;
+    U3MODEbits.WAKE   = 0;
+    U3MODEbits.LPBACK = 0; 
+    U3MODEbits.ABAUD  = 0;
+    U3MODEbits.RXINV  = 0; 
+    U3MODEbits.PDSEL1 = 0; 
+    U3MODEbits.PDSEL0 = 0; 
+    U3MODEbits.STSEL  = 0;  
+
+    
+    U3MODEbits.BRGH   = 0; 
+
+    U3BRG = (int)(((float)PB_FRQ/(16*baud) - 1) + 0.5); // add 0.5 just in order to implement the round using the floor approach
+
+    U3STAbits.UTXEN    = 1;
+    U3STAbits.URXEN    = 1;
+    U3MODEbits.ON      = 1; 
+    
+}
 
 
+/***	UART_ConfigurePins
+**
+**	Parameters:
+**		
+**
+**	Return Value:
+**		
+**
+**	Description:
+**		This function configures the digital pins involved in the UART module: 
+**      The UART_TX digital pin is configured as digital output.
+**      The UART_RX digital pin is configured as digital input.
+**      The UART_TX and UART_RX are mapped over the UART4 interface.
+**      The function uses pin related definitions from config.h file.
+**      This is a low-level function called by UART_Init(), so user should avoid calling it directly.   
+**          
+*/
+void UART3_ConfigurePins()
+{
+    // TRISFbits.TRISF12  = 0;   //TX digital output
+   RPB5R = 1;     // 0001 U3TX RPB5/RB5/AN5  shared with motor driver pin BIN2 
+   // disable analog (set pins as digital))
+    ANSELBbits.ANSB5 = 0;
+    
+    /* No input selected yet */
+    //TRISFbits.TRISF13 = 1;   //RX digital input
+    //U1RXR = 9;     // 1001 
+}
+
+
+
+
+/***	UART_PutChar
+**
+**	Parameters:
+**          char ch -   the character to be transmitted over UART.
+**
+**	Return Value:
+**		
+**
+**	Description:
+**		This function transmits a character over UART4. 
+**      
+**          
+*/
+void UART_PutChar3(char ch)
+{
+    while(U3STAbits.UTXBF == 1);
+    U3TXREG = ch;
+}
+
+/***	UART_PutString
+**
+**	Parameters:
+**          char szData[] -   the zero terminated string containing characters to be transmitted over UART.
+**
+**	Return Value:
+**		
+**
+**	Description:
+**		This function transmits all the characters from a zero terminated string over UART4. The terminator character is not sent.
+**      
+**          
+*/
+void UART_PutString3(char szData[])
+{
+    char *pData = szData;
+    while(*pData)
+    {
+        UART_PutChar3((*(pData++)));
+    }
+}
+/****************************************
+Same as putc3() but  w/o hardware control
+*****************************************/
+int putc3(char c)
+{
+   while ( U3STAbits.UTXBF);   // wait while Tx buffer is still full or  while(U3STAbits.TRMT == 0);
+   U3TXREG = c;
+   return c;
+}
+/************************* end of UART3 section ***************************/
+
+/****************************** Uart5 section *****************************/
+
+/***	UART_ConfigureUart
+**
+**	Parameters:
+**		unsigned int baud - UART baud rate.
+**                                     for example 115200 corresponds to 115200 baud
+**
+**	Return Value:
+**		
+**
+**	Description:
+**		This function configures the UART4 hardware interface of PIC32, according 
+**      to the provided baud rate, no parity and 1 stop bit, with no interrupts.
+**      In order to compute the baud rate value, it uses the peripheral bus frequency definition (PB_FRQ, located in config.h)
+**      This is a low-level function called by initialization functions, so user should avoid calling it directly.   
+**      
+**          
+*/
+
+void UART5_ConfigureUart(unsigned int baud)
+{
+    U5MODEbits.ON     = 0;
+    U5MODEbits.SIDL   = 0;
+    U5MODEbits.IREN   = 0; 
+    U5MODEbits.RTSMD  = 0;
+    U5MODEbits.UEN0   = 0; 
+    U5MODEbits.UEN1   = 0;
+    U5MODEbits.WAKE   = 0;
+    U5MODEbits.LPBACK = 0; 
+    U5MODEbits.ABAUD  = 0;
+    U5MODEbits.RXINV  = 0; 
+    U5MODEbits.PDSEL1 = 0; 
+    U5MODEbits.PDSEL0 = 0; 
+    U5MODEbits.STSEL  = 0;  
+
+    
+    U5MODEbits.BRGH   = 0; 
+
+    U5BRG = (int)(((float)PB_FRQ/(16*baud) - 1) + 0.5); // add 0.5 just in order to implement the round using the floor approach
+
+    U5STAbits.UTXEN    = 1;
+    U5STAbits.URXEN    = 1;
+    U5MODEbits.ON      = 1; 
+    
+}
+
+
+/***	UART_ConfigurePins
+**
+**	Parameters:
+**		
+**
+**	Return Value:
+**		
+**
+**	Description:
+**		This function configures the digital pins involved in the UART module: 
+**      The UART_TX digital pin is configured as digital output.
+**      The UART_RX digital pin is configured as digital input.
+**      The UART_TX and UART_RX are mapped over the UART interface.
+**      The function uses pin related definitions from config.h file.
+**      This is a low-level function called by UART_Init(), so user should avoid calling it directly.   
+**          
+*/
+void UART5_ConfigurePins(){
+   TRISEbits.TRISE8  = 0;   //TX digital output
+   RPE8R = 0b0100;     // 0001 U3TX RPB5/RB5/AN5  shared with motor driver pin BIN2 
+   // disable analog (set pins as digital))
+   // ANSELBbits.ANSB5 = 0;
+}
+
+
+void uart5_init(int baud)
+{
+    UART5_ConfigurePins();
+    UART5_ConfigureUart(baud);
+}
+
+/***	UART_PutChar
+**
+**	Parameters:
+**          char ch -   the character to be transmitted over UART.
+**
+**	Return Value:
+**		
+**
+**	Description:
+**		This function transmits a character over UART4. 
+**      
+**          
+*/
+void UART_PutChar5(char ch)
+{
+    while(U5STAbits.UTXBF == 1);
+    U5TXREG = ch;
+}
+
+/***	UART_PutString
+**
+**	Parameters:
+**          char szData[] -   the zero terminated string containing characters to be transmitted over UART.
+**
+**	Return Value:
+**		
+**
+**	Description:
+**		This function transmits all the characters from a zero terminated string over UART4. The terminator character is not sent.
+**      
+**          
+*/
+void UART_PutString5(char szData[])
+{
+    char *pData = szData;
+    while(*pData)
+    {
+        UART_PutChar5((*(pData++)));
+    }
+}
+/****************************************
+Same as putc3() but  w/o hardware control
+*****************************************/
+int putc5(char c)
+{
+   while ( U5STAbits.UTXBF);   // wait while Tx buffer is still full or  while(U3STAbits.TRMT == 0);
+   U5TXREG = c;
+   return c;
+}
+
+/************************* end of UART5 section ***************************/
 
 #endif
-/***** end of UART1 section ******************/
 
 #ifdef MICROSTICK_II
 /* U1BRG (BRATE)
@@ -1456,14 +1866,17 @@ U2BRG = (PBCLK  / 16 / baudrate) -1 ; for BREGH=0
 //baud 115200
 #define BRATE   21        // (40000000/16/115200)-1
  	
-void Uart2_init( void)
+void Uart2_init( int baudrate)
 {
-   U2BRG    = BRATE;    
+   //U2BRG    = BRATE;  
+   U2BRG = (40000000  / 16 / baudrate) -1 ; //for BREGH=0
    U2MODE    = 0x8000 ;
    U2STA    = 0x0400;      // enable transmission
   // TRTS    = 0;        // make RTS output
    //RTS     = 1;        // set RTS default status
 } // initUart2
+
+
 #endif
 
 
@@ -1551,7 +1964,7 @@ void stdio_set(int _stdio){
 #ifdef RTOS
 /*Only for RTOS system*/
 static SemaphoreHandle_t mutex_stdio;
-static mutex_created =0;
+static int mutex_created =0;
 /*
 	Locks the stdio mutex.
 	If the mutex does not exist yet, it will be created.
@@ -1615,7 +2028,10 @@ void _mon_putc (char c)
             while(U4STAbits.UTXBF == 1);
             U4TXREG = c;     
             break; 
-
+        case C_UART5:
+            while(U5STAbits.UTXBF == 1);
+            U5TXREG = c;     
+            break; 
         /* LCD */
         case C_LCD:
             if (c <= 13){ // a control character
