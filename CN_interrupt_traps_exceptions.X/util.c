@@ -394,18 +394,18 @@ void _general_exception_handler( unsigned c, unsigned s){
 #elif   defined EXPLORER_16_32
 /* Exception handler that prints a message to the active console */
 /* It also blinks all LEDS every 100mS                           */
-void _general_exception_handler( unsigned c, unsigned s){  
-    ios_init();
-    while (1){
-        printf("\n\rException called\n                ");
-        /* Blinks all LEDs*/
-        LATA = LATA & 0xffffff00;
-        delay_ms(100);
-        LATA = LATA | 0x000000ff;
-        printf("\n\r                \n                ");
-        delay_ms(100);
-    }
-} // exception handler
+// void _general_exception_handler( unsigned c, unsigned s){  
+    // ios_init();
+    // while (1){
+        // printf("\n\rException called\n                ");
+        // /* Blinks all LEDs*/
+        // LATA = LATA & 0xffffff00;
+        // delay_ms(100);
+        // LATA = LATA | 0x000000ff;
+        // printf("\n\r                \n                ");
+        // delay_ms(100);
+    // }
+// } // exception handler
 #elif defined MICROSTICK_II
     // todo
 #endif
